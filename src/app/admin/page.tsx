@@ -10,6 +10,10 @@ import {
   getQuizWithQuestions,
   createSession,
   parseQuizText,
+  questionsToText,
+  updateQuizTitle,
+  deleteAllQuestionsForQuiz,
+  deleteQuiz,
 } from "@/lib/queries";
 import type { Quiz, Question } from "@/lib/types";
 
@@ -17,14 +21,15 @@ export default function AdminPage() {
   const router = useRouter();
   const [quizzes, setQuizzes] = useState<(Quiz & { questionCount?: number })[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"list" | "create">("list");
+  const [tab, setTab] = useState<"list" | "create" | "edit">("list");
 
-  // Formulaire de création
+  // Formulaire de création / édition
   const [title, setTitle] = useState("");
   const [importText, setImportText] = useState("");
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<Omit<Question, "id">[]>([]);
+  const [editingQuizId, setEditingQuizId] = useState<string | null>(null);
 
   useEffect(() => {
     loadQuizzes();
@@ -33,7 +38,6 @@ export default function AdminPage() {
   async function loadQuizzes() {
     try {
       const data = await getQuizzes();
-      // Charger le nombre de questions pour chaque quiz
       const withCounts = await Promise.all(
         data.map(async (q) => {
           try {
@@ -99,6 +103,78 @@ export default function AdminPage() {
     }
   }
 
+  async function handleEdit(quizId: string) {
+    try {
+      const quizData = await getQuizWithQuestions(quizId);
+      setEditingQuizId(quizId);
+      setTitle(quizData.title);
+      setImportText(questionsToText(quizData.questions));
+      setPreview([]);
+      setError("");
+      setTab("edit");
+    } catch (err: any) {
+      alert("Erreur: " + (err.message || "Impossible de charger le quiz"));
+    }
+  }
+
+  async function handleSaveEdit() {
+    setError("");
+    if (!title.trim()) {
+      setError("Le titre est requis.");
+      return;
+    }
+    if (preview.length === 0) {
+      setError("Prévisualisez les questions avant de sauvegarder.");
+      return;
+    }
+    if (!editingQuizId) return;
+
+    setCreating(true);
+    try {
+      await updateQuizTitle(editingQuizId, title.trim());
+      await deleteAllQuestionsForQuiz(editingQuizId);
+      const questionsToInsert = preview.map((q, i) => ({
+        ...q,
+        quiz_id: editingQuizId,
+        order: i,
+      }));
+      await addQuestions(questionsToInsert);
+      setTitle("");
+      setImportText("");
+      setPreview([]);
+      setEditingQuizId(null);
+      setTab("list");
+      await loadQuizzes();
+    } catch (err: any) {
+      setError(err.message || "Erreur lors de la sauvegarde.");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleDelete(quizId: string, quizTitle: string) {
+    const confirmed = window.confirm(
+      `Supprimer le quiz "${quizTitle}" et toutes ses questions ? Cette action est irréversible.`
+    );
+    if (!confirmed) return;
+
+    try {
+      await deleteQuiz(quizId);
+      await loadQuizzes();
+    } catch (err: any) {
+      alert("Erreur: " + (err.message || "Impossible de supprimer le quiz. Il a peut-être des sessions existantes."));
+    }
+  }
+
+  function handleCancelEdit() {
+    setTab("list");
+    setEditingQuizId(null);
+    setTitle("");
+    setImportText("");
+    setPreview([]);
+    setError("");
+  }
+
   async function handleLaunch(quizId: string) {
     try {
       const session = await createSession(quizId);
@@ -107,6 +183,9 @@ export default function AdminPage() {
       alert("Erreur: " + (err.message || "Impossible de créer la session"));
     }
   }
+
+  const isEditing = tab === "edit";
+  const showForm = tab === "create" || tab === "edit";
 
   return (
     <main className="mx-auto max-w-4xl p-4 md:p-8">
@@ -120,7 +199,7 @@ export default function AdminPage() {
       {/* Onglets */}
       <div className="flex gap-2 mb-6">
         <button
-          onClick={() => setTab("list")}
+          onClick={() => { handleCancelEdit(); setTab("list"); }}
           className={`px-4 py-2 rounded-lg font-medium transition ${
             tab === "list"
               ? "bg-blue-600 text-white"
@@ -130,7 +209,7 @@ export default function AdminPage() {
           Mes quiz
         </button>
         <button
-          onClick={() => setTab("create")}
+          onClick={() => { handleCancelEdit(); setTab("create"); }}
           className={`px-4 py-2 rounded-lg font-medium transition ${
             tab === "create"
               ? "bg-blue-600 text-white"
@@ -139,6 +218,11 @@ export default function AdminPage() {
         >
           + Créer un quiz
         </button>
+        {isEditing && (
+          <span className="px-4 py-2 rounded-lg font-medium bg-amber-500 text-white">
+            ✏️ Modification en cours
+          </span>
+        )}
       </div>
 
       {/* Liste des quiz */}
@@ -170,12 +254,26 @@ export default function AdminPage() {
                       {(quiz.questionCount ?? 0) > 1 ? "s" : ""}
                     </p>
                   </div>
-                  <button
-                    onClick={() => handleLaunch(quiz.id)}
-                    className="rounded-lg bg-green-600 px-4 py-2 text-white font-medium hover:bg-green-700 transition"
-                  >
-                    Lancer une session
-                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleEdit(quiz.id)}
+                      className="rounded-lg bg-blue-100 px-3 py-2 text-blue-700 text-sm font-medium hover:bg-blue-200 transition"
+                    >
+                      Éditer
+                    </button>
+                    <button
+                      onClick={() => handleDelete(quiz.id, quiz.title)}
+                      className="rounded-lg bg-red-100 px-3 py-2 text-red-700 text-sm font-medium hover:bg-red-200 transition"
+                    >
+                      Supprimer
+                    </button>
+                    <button
+                      onClick={() => handleLaunch(quiz.id)}
+                      className="rounded-lg bg-green-600 px-4 py-2 text-white font-medium hover:bg-green-700 transition"
+                    >
+                      Lancer une session
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -183,9 +281,13 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* Création de quiz */}
-      {tab === "create" && (
+      {/* Formulaire création / édition */}
+      {showForm && (
         <div className="space-y-6">
+          <h2 className="text-xl font-semibold">
+            {isEditing ? "Modifier le quiz" : "Créer un nouveau quiz"}
+          </h2>
+
           {/* Titre */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -203,7 +305,7 @@ export default function AdminPage() {
           {/* Import texte */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Importer les questions (format texte)
+              {isEditing ? "Questions (format texte)" : "Importer les questions (format texte)"}
             </label>
             <textarea
               value={importText}
@@ -269,14 +371,38 @@ export default function AdminPage() {
                 </div>
               ))}
 
-              <button
-                onClick={handleCreate}
-                disabled={creating}
-                className="w-full rounded-lg bg-blue-600 px-6 py-3 text-white font-semibold hover:bg-blue-700 transition disabled:opacity-50"
-              >
-                {creating ? "Création en cours..." : "Créer le quiz"}
-              </button>
+              <div className="flex gap-3">
+                <button
+                  onClick={isEditing ? handleSaveEdit : handleCreate}
+                  disabled={creating}
+                  className="flex-1 rounded-lg bg-blue-600 px-6 py-3 text-white font-semibold hover:bg-blue-700 transition disabled:opacity-50"
+                >
+                  {creating
+                    ? "Enregistrement..."
+                    : isEditing
+                    ? "Sauvegarder les modifications"
+                    : "Créer le quiz"}
+                </button>
+                {isEditing && (
+                  <button
+                    onClick={handleCancelEdit}
+                    className="rounded-lg bg-gray-200 px-4 py-3 text-gray-700 font-medium hover:bg-gray-300 transition"
+                  >
+                    Annuler
+                  </button>
+                )}
+              </div>
             </div>
+          )}
+
+          {/* Bouton annuler visible même sans preview en mode édition */}
+          {isEditing && preview.length === 0 && (
+            <button
+              onClick={handleCancelEdit}
+              className="rounded-lg bg-gray-200 px-4 py-2 text-gray-700 font-medium hover:bg-gray-300 transition"
+            >
+              Annuler les modifications
+            </button>
           )}
         </div>
       )}

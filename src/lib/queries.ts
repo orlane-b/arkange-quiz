@@ -44,6 +44,32 @@ export async function getQuizWithQuestions(
   return { ...quiz, questions: questions ?? [] };
 }
 
+export async function updateQuizTitle(quizId: string, title: string): Promise<void> {
+  const { error } = await supabase
+    .from("quizzes")
+    .update({ title })
+    .eq("id", quizId);
+  if (error) throw error;
+}
+
+export async function deleteAllQuestionsForQuiz(quizId: string): Promise<void> {
+  const { error } = await supabase
+    .from("questions")
+    .delete()
+    .eq("quiz_id", quizId);
+  if (error) throw error;
+}
+
+export async function deleteQuiz(quizId: string): Promise<void> {
+  // Supprimer les questions d'abord (contrainte FK)
+  await deleteAllQuestionsForQuiz(quizId);
+  const { error } = await supabase
+    .from("quizzes")
+    .delete()
+    .eq("id", quizId);
+  if (error) throw error;
+}
+
 // =============================================
 // Questions
 // =============================================
@@ -314,4 +340,24 @@ export function parseQuizText(
   }
 
   return questions;
+}
+
+export function questionsToText(questions: Question[]): string {
+  return questions
+    .map((q) => {
+      if (q.type === "truefalse") {
+        const vrai = q.correct_answer === "Vrai" ? "V *" : "V";
+        const faux = q.correct_answer === "Faux" ? "F *" : "F";
+        return `Q: ${q.text}\n${vrai}\n${faux}`;
+      } else {
+        const letters = ["A", "B", "C", "D"];
+        const optionLines = q.options.map((opt, i) => {
+          const letter = letters[i] || String.fromCharCode(65 + i);
+          const star = opt === q.correct_answer ? " *" : "";
+          return `${letter}: ${opt}${star}`;
+        });
+        return `Q: ${q.text}\n${optionLines.join("\n")}`;
+      }
+    })
+    .join("\n\n");
 }
